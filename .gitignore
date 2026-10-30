@@ -1,0 +1,16 @@
+# Pastas de Build do CMake
+build/
+out/
+bin/
+
+# Arquivos de IDEs
+.vscode/
+.vs/
+*.user
+*.suo
+
+# pixi environments
+.pixi/*
+!.pixi/config.toml
+.pixi/
+build/

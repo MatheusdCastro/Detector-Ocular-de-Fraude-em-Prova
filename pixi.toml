@@ -1,0 +1,18 @@
+[workspace]
+authors = ["MatheusdCastro <matheusdcastrovieira@gmail.com>"]
+channels = ["conda-forge"]
+name = "Detector-Ocular-de-Fraude-em-Prova"
+platforms = ["linux-64"]
+version = "0.1.0"
+
+[dependencies]
+python = "3.14.*"
+cmake = "4.2.*"
+ninja = "1.13.*"
+gxx_linux-64 = "15.*"
+cuda-nvcc = "13.1.*"
+cuda-cudart-dev = "13.1.*"
+
+[tasks]
+configure = "cmake -S . -B build -G Ninja"
+build = "cmake --build build"
