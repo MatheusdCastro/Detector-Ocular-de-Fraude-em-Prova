@@ -8,3 +8,7 @@
 .venv
 venv/
 venv.bak/
+
+# Bytecode do Python
+__pycache__/
+*.py[cod]
