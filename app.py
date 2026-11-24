@@ -114,21 +114,29 @@ class App(QWidget):
         )
         self.video_label.setPixmap(pixmap)
 
+    REGION_LABELS = {
+        "left": "esquerda",
+        "right": "direita",
+        "up": "cima",
+        "down": "baixo",
+        "center": "centro",
+    }
+
     def _describe_gaze(self):
         if self.gaze.is_blinking():
             return "Piscando"
-        if self.gaze.is_right():
-            direction = "Olhando para a direita"
-        elif self.gaze.is_left():
-            direction = "Olhando para a esquerda"
-        elif self.gaze.is_center():
-            direction = "Olhando para o centro"
-        else:
+
+        region = self.gaze.gaze_region()
+        if region is None:
             return "Rosto/pupilas não detectados"
 
-        h = self.gaze.horizontal_ratio()
-        v = self.gaze.vertical_ratio()
-        return f"{direction}  (horizontal: {h:.2f} | vertical: {v:.2f})"
+        horizontal, vertical = region
+        yaw, pitch = self.gaze.gaze_angles()
+        pose = self.gaze.head_pose
+        return (
+            f"Olhando para: {self.REGION_LABELS[horizontal]} / {self.REGION_LABELS[vertical]}"
+            f"  (olhar: {yaw:+.0f}° / {pitch:+.0f}° | cabeça: {pose.yaw:+.0f}° / {pose.pitch:+.0f}°)"
+        )
 
     # ----------------------------------------------------------- calibração
     def start_screen_calibration(self):

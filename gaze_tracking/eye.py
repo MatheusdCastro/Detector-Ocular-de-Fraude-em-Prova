@@ -118,4 +118,9 @@ class Eye:
             calibration.evaluate(self.frame, side)
 
         threshold = calibration.threshold(side)
-        self.pupil = Pupil(self.frame, threshold)
+
+        # Máscara do polígono do olho no sistema de coordenadas do recorte
+        eye_mask = np.zeros(self.frame.shape[:2], np.uint8)
+        cv2.fillPoly(eye_mask, [self.landmark_points - np.array(self.origin)], 255)
+
+        self.pupil = Pupil(self.frame, threshold, eye_mask)

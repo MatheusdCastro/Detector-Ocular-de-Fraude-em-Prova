@@ -5,6 +5,7 @@ import dlib
 
 from .calibration import Calibration
 from .eye import Eye
+from .head_pose import LANDMARK_IDS, HeadPoseEstimator
 
 
 class GazeTracking:
@@ -14,11 +15,21 @@ class GazeTracking:
     and pupils and lets you know if the eyes are open or closed.
     """
 
+    # Limiares (em graus) para classificar a região do olhar. Valores iniciais,
+    # a serem ajustados com testes reais.
+    HORIZONTAL_THRESHOLD_DEG = 15
+    VERTICAL_THRESHOLD_DEG = 10
+    # Conversão aproximada do deslocamento da pupila (razão 0.5 = centro) em graus.
+    EYE_DEGREES_PER_RATIO = 60
+
     def __init__(self):
         self.frame = None
         self.eye_left = None
         self.eye_right = None
+        self.landmarks = None
+        self.head_pose = None
         self.calibration = Calibration()
+        self._head_pose_estimator = HeadPoseEstimator()
 
         # _face_detector is used to detect faces
         self._face_detector = dlib.get_frontal_face_detector()
@@ -46,10 +57,15 @@ class GazeTracking:
 
         try:
             landmarks = self._predictor(frame, faces[0])
+            self.landmarks = landmarks
             self.eye_left = Eye(frame, landmarks, 0, self.calibration)
             self.eye_right = Eye(frame, landmarks, 1, self.calibration)
+            height, width = frame.shape[:2]
+            self.head_pose = self._head_pose_estimator.estimate(landmarks, (width, height))
 
         except IndexError:
+            self.landmarks = None
+            self.head_pose = None
             self.eye_left = None
             self.eye_right = None
 
@@ -117,6 +133,45 @@ class GazeTracking:
             blinking_ratio = (self.eye_left.blinking + self.eye_right.blinking) / 2
             return blinking_ratio > 3.8
 
+    def gaze_angles(self):
+        """Returns (yaw, pitch) in degrees combining the head pose with the
+        pupil position inside the eyes. Yaw is positive to the person's right
+        and pitch is positive when looking up. Returns None if the head pose
+        or the pupils are unavailable.
+        """
+        if self.head_pose is None or not self.pupils_located:
+            return None
+
+        eye_yaw = (0.5 - self.horizontal_ratio()) * self.EYE_DEGREES_PER_RATIO
+        eye_pitch = (0.5 - self.vertical_ratio()) * self.EYE_DEGREES_PER_RATIO
+        return (self.head_pose.yaw + eye_yaw, self.head_pose.pitch + eye_pitch)
+
+    def gaze_region(self):
+        """Returns the region being looked at as (horizontal, vertical), where
+        horizontal is "left", "center" or "right" and vertical is "up",
+        "center" or "down". Returns None if it can't be determined.
+        """
+        angles = self.gaze_angles()
+        if angles is None:
+            return None
+
+        yaw, pitch = angles
+        if yaw >= self.HORIZONTAL_THRESHOLD_DEG:
+            horizontal = "right"
+        elif yaw <= -self.HORIZONTAL_THRESHOLD_DEG:
+            horizontal = "left"
+        else:
+            horizontal = "center"
+
+        if pitch >= self.VERTICAL_THRESHOLD_DEG:
+            vertical = "up"
+        elif pitch <= -self.VERTICAL_THRESHOLD_DEG:
+            vertical = "down"
+        else:
+            vertical = "center"
+
+        return (horizontal, vertical)
+
     def annotated_frame(self):
         """Returns the main frame with pupils highlighted"""
         frame = self.frame.copy()
@@ -129,5 +184,15 @@ class GazeTracking:
             cv2.line(frame, (x_left, y_left - 5), (x_left, y_left + 5), color)
             cv2.line(frame, (x_right - 5, y_right), (x_right + 5, y_right), color)
             cv2.line(frame, (x_right, y_right - 5), (x_right, y_right + 5), color)
+
+        for eye in (self.eye_left, self.eye_right):
+            if eye is not None and eye.landmark_points is not None:
+                cv2.polylines(frame, [eye.landmark_points], True, (255, 200, 0), 1)
+
+        if self.landmarks is not None:
+            # Landmarks usados na pose da cabeça (nariz, queixo, boca e cantos dos olhos)
+            for point_id in LANDMARK_IDS:
+                part = self.landmarks.part(point_id)
+                cv2.circle(frame, (part.x, part.y), 2, (0, 0, 255), -1)
 
         return frame
