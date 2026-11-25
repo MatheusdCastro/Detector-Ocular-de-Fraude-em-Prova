@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMessageBox,
     QPushButton,
     QVBoxLayout,
@@ -14,10 +15,11 @@ from PySide6.QtWidgets import (
 )
 
 from gaze_tracking.gaze_tracking import GazeTracking
+from supervisor_client import SupervisorClient
+from supervisor_protocol import DIRECTION_LABELS, SUPERVISOR_URL, VIDEO_SIZE
 
 CAMERA_INDEX = 0
 FRAME_INTERVAL_MS = 15  # intervalo entre leituras da câmera (~60 fps no máximo)
-VIDEO_SIZE = (640, 480)
 
 
 class App(QWidget):
@@ -32,6 +34,9 @@ class App(QWidget):
         self.timer = QTimer(self)
         self.timer.setInterval(FRAME_INTERVAL_MS)
         self.timer.timeout.connect(self._update_frame)
+
+        self.supervisor = SupervisorClient(self)
+        self.supervisor.connection_changed.connect(self._update_supervisor_connection)
 
         self._build_ui()
 
@@ -62,6 +67,32 @@ class App(QWidget):
         buttons.addWidget(self.calibrate_button)
         layout.addLayout(buttons)
 
+        connection = QHBoxLayout()
+        address_label = QLabel("Endereço do supervisor")
+        self.supervisor_address = QLineEdit(SUPERVISOR_URL)
+        address_label.setBuddy(self.supervisor_address)
+        self.connection_button = QPushButton("Conectar")
+        self.connection_button.clicked.connect(self._toggle_supervisor_connection)
+        connection.addWidget(address_label)
+        connection.addWidget(self.supervisor_address, stretch=1)
+        connection.addWidget(self.connection_button)
+        layout.addLayout(connection)
+
+        self.connection_label = QLabel("Desconectado do supervisor.")
+        self.connection_label.setAlignment(Qt.AlignCenter)
+        self.connection_label.setWordWrap(True)
+        layout.addWidget(self.connection_label)
+
+    def _toggle_supervisor_connection(self):
+        self.supervisor.toggle_connection(self.supervisor_address.text())
+
+    def _update_supervisor_connection(self, connecting_or_connected, message):
+        self.supervisor_address.setReadOnly(connecting_or_connected)
+        self.connection_button.setText(
+            "Desconectar" if connecting_or_connected else "Conectar"
+        )
+        self.connection_label.setText(message)
+
     # -------------------------------------------------------------- câmera
     def toggle_camera(self):
         if self.running:
@@ -82,6 +113,7 @@ class App(QWidget):
         self.capture = capture
         self.running = True
         self.camera_button.setText("Desligar câmera")
+        self.supervisor.set_status(True)
         self.timer.start()
 
     def stop_camera(self):
@@ -94,6 +126,7 @@ class App(QWidget):
         self.video_label.setText("Câmera desligada")
         self.status_label.setText("Aguardando...")
         self.camera_button.setText("Ligar câmera")
+        self.supervisor.set_status(False)
 
     def _update_frame(self):
         ok, frame = self.capture.read()
@@ -104,7 +137,8 @@ class App(QWidget):
 
         self.gaze.refresh(frame)
         annotated = self.gaze.annotated_frame()
-        self.status_label.setText(self._describe_gaze())
+        direction, description = self._gaze_status()
+        self.status_label.setText(description)
 
         height, width = annotated.shape[:2]
         rgb = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
@@ -114,6 +148,8 @@ class App(QWidget):
         )
         self.video_label.setPixmap(pixmap)
 
+        self.supervisor.publish_frame(annotated, direction)
+
     REGION_LABELS = {
         "left": "esquerda",
         "right": "direita",
@@ -122,21 +158,22 @@ class App(QWidget):
         "center": "centro",
     }
 
-    def _describe_gaze(self):
+    def _gaze_status(self):
         if self.gaze.is_blinking():
-            return "Piscando"
+            return "blinking", DIRECTION_LABELS["blinking"]
 
         region = self.gaze.gaze_region()
         if region is None:
-            return "Rosto/pupilas não detectados"
+            return "not_detected", DIRECTION_LABELS["not_detected"]
 
         horizontal, vertical = region
         yaw, pitch = self.gaze.gaze_angles()
         pose = self.gaze.head_pose
-        return (
+        description = (
             f"Olhando para: {self.REGION_LABELS[horizontal]} / {self.REGION_LABELS[vertical]}"
             f"  (olhar: {yaw:+.0f}° / {pitch:+.0f}° | cabeça: {pose.yaw:+.0f}° / {pose.pitch:+.0f}°)"
         )
+        return horizontal, description
 
     # ----------------------------------------------------------- calibração
     def start_screen_calibration(self):
@@ -148,6 +185,7 @@ class App(QWidget):
     # ------------------------------------------------------------- encerrar
     def closeEvent(self, event):
         self.stop_camera()
+        self.supervisor.disconnect_from_supervisor()
         super().closeEvent(event)
 
 
