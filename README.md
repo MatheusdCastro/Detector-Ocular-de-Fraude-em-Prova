@@ -1,7 +1,7 @@
 # Detector-Ocular-de-Fraude-em-Prova
 Projeto final da disciplina de PDI. Sistema de Rastreamento Ocular para Detecção de Fraude em Provas
 
-## Executar com o supervisor
+## Executar
 
 Com o ambiente virtual ativo e as dependências de `requirements.txt` instaladas,
 abra dois terminais na pasta do projeto.
