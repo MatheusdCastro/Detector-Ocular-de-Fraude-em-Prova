@@ -117,18 +117,30 @@ class App(QWidget):
     def _describe_gaze(self):
         if self.gaze.is_blinking():
             return "Piscando"
-        if self.gaze.is_right():
-            direction = "Olhando para a direita"
-        elif self.gaze.is_left():
-            direction = "Olhando para a esquerda"
-        elif self.gaze.is_center():
-            direction = "Olhando para o centro"
-        else:
+        if not self.gaze.pupils_located:
             return "Rosto/pupilas não detectados"
+
+        # Direção horizontal e vertical são independentes e combináveis
+        parts = []
+        if self.gaze.is_right():
+            parts.append("direita")
+        elif self.gaze.is_left():
+            parts.append("esquerda")
+
+        if self.gaze.is_up():
+            parts.append("cima")
+        elif self.gaze.is_down():
+            parts.append("baixo")
+
+        if parts:
+            direction = "Olhando para " + " + ".join(parts)
+        else:
+            direction = "Olhando para o centro"
 
         h = self.gaze.horizontal_ratio()
         v = self.gaze.vertical_ratio()
-        return f"{direction}  (horizontal: {h:.2f} | vertical: {v:.2f})"
+        conf = self.gaze.pupil_confidence()
+        return f"{direction}  (H: {h:.2f} | V: {v:.2f} | Confiança: {conf:.0%})"
 
     # ----------------------------------------------------------- calibração
     def start_screen_calibration(self):

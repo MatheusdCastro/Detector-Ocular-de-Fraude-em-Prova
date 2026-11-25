@@ -15,6 +15,8 @@ class Eye:
     LEFT_EYE_POINTS = [36, 37, 38, 39, 40, 41]
     RIGHT_EYE_POINTS = [42, 43, 44, 45, 46, 47]
 
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(2, 2))
+
     def __init__(self, original_frame, landmarks, side, calibration):
         self.frame = None
         self.origin = None
@@ -23,6 +25,14 @@ class Eye:
         self.landmark_points = None
 
         self._analyze(original_frame, landmarks, side, calibration)
+
+    @property
+    def confidence(self) -> float:
+        # Confiança na detecção da pupila
+        if not self.valid:
+            return 0.0
+        area_score = 1 - abs(self.area_ratio - 0.3) / 0.3
+        return min(1.0, self.circularity * max(0, area_score))
 
     @staticmethod
     def _middle_point(p1, p2):
@@ -48,21 +58,27 @@ class Eye:
         region = region.astype(np.int32)
         self.landmark_points = region
 
-        # Applying a mask to get only the eye
+        # Recorte da caixa do olho
         height, width = frame.shape[:2]
-        black_frame = np.zeros((height, width), np.uint8)
-        mask = np.full((height, width), 255, np.uint8)
-        cv2.fillPoly(mask, [region], (0, 0, 0))
-        eye = cv2.bitwise_not(black_frame, frame.copy(), mask=mask)
-
-        # Cropping around the eye
         margin = 5
-        min_x = np.min(region[:, 0]) - margin
-        max_x = np.max(region[:, 0]) + margin
-        min_y = np.min(region[:, 1]) - margin
-        max_y = np.max(region[:, 1]) + margin
+        min_x = int(max(np.min(region[:, 0]) - margin, 0))
+        max_x = int(min(np.max(region[:, 0]) + margin, width))
+        min_y = int(max(np.min(region[:, 1]) - margin, 0))
+        max_y = int(min(np.max(region[:, 1]) + margin, height))
 
-        self.frame = eye[min_y:max_y, min_x:max_x]
+        crop = frame[min_y:max_y, min_x:max_x]
+        if (crop.size == 0 or crop.shape[0] < 3 or crop.shape[1] < 3):
+            raise ValueError("Recorte do olho inválido")
+
+        local_region = region - np.array([min_x, min_y], dtype=np.int32)
+        mask = np.zeros(crop.shape[:2], np.uint8) # Preto dentro da região, branco fora
+
+        # Pinta oq está fora do olho de branco
+        cv2.fillPoly(mask, [local_region], 255)
+        enhanced = self.clahe.apply(crop)
+        eye = cv2.bitwise_or(enhanced, cv2.bitwise_not(mask))
+
+        self.frame = eye
         self.origin = (min_x, min_y)
 
         height, width = self.frame.shape[:2]

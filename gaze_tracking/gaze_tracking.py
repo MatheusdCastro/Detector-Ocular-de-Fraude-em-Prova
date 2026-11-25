@@ -5,6 +5,7 @@ import dlib
 
 from .calibration import Calibration
 from .eye import Eye
+from .smoothing import ExponentialSmoothing
 
 
 class GazeTracking:
@@ -26,6 +27,12 @@ class GazeTracking:
         # _predictor is used to get facial landmarks of a given face
         model_path = Path(__file__).parent / "trained_models" / "shape_predictor_68_face_landmarks.dat"
         self._predictor = dlib.shape_predictor(str(model_path))
+
+        # Suavização temporal
+        self._smooth_left = ExponentialSmoothing(alpha=0.4)
+        self._smooth_right = ExponentialSmoothing(alpha=0.4)
+        self._smooth_h = ExponentialSmoothing(alpha=0.4)
+        self._smooth_v = ExponentialSmoothing(alpha=0.4)
 
     @property
     def pupils_located(self):
@@ -49,9 +56,26 @@ class GazeTracking:
             self.eye_left = Eye(frame, landmarks, 0, self.calibration)
             self.eye_right = Eye(frame, landmarks, 1, self.calibration)
 
-        except IndexError:
+        except (IndexError, ValueError, cv2.error):
             self.eye_left = None
             self.eye_right = None
+
+        # Atualiza valores suavizados
+        if self.pupils_located:
+            raw_left = (self.eye_left.origin[0] + self.eye_left.pupil.x,
+                        self.eye_left.origin[1] + self.eye_left.pupil.y)
+            raw_right = (self.eye_right.origin[0] + self.eye_right.pupil.x,
+                         self.eye_right.origin[1] + self.eye_right.pupil.y)
+            self._smooth_left.update(raw_left)
+            self._smooth_right.update(raw_right)
+
+            h_left = self.eye_left.pupil.x / (self.eye_left.center[0] * 2 - 10)
+            h_right = self.eye_right.pupil.x / (self.eye_right.center[0] * 2 - 10)
+            self._smooth_h.update((h_left + h_right) / 2)
+
+            v_left = self.eye_left.pupil.y / (self.eye_left.center[1] * 2 - 10)
+            v_right = self.eye_right.pupil.y / (self.eye_right.center[1] * 2 - 10)
+            self._smooth_v.update((v_left + v_right) / 2)
 
     def refresh(self, frame):
         """Refreshes the frame and analyzes it.
@@ -63,38 +87,40 @@ class GazeTracking:
         self._analyze()
 
     def pupil_left_coords(self):
-        """Returns the coordinates of the left pupil"""
-        if self.pupils_located:
-            x = self.eye_left.origin[0] + self.eye_left.pupil.x
-            y = self.eye_left.origin[1] + self.eye_left.pupil.y
-            return (x, y)
+        """Returns the smoothed coordinates of the left pupil"""
+        if self.pupils_located and self._smooth_left.value is not None:
+            x, y = self._smooth_left.value
+            return (int(x), int(y))
 
     def pupil_right_coords(self):
-        """Returns the coordinates of the right pupil"""
-        if self.pupils_located:
-            x = self.eye_right.origin[0] + self.eye_right.pupil.x
-            y = self.eye_right.origin[1] + self.eye_right.pupil.y
-            return (x, y)
+        """Returns the smoothed coordinates of the right pupil"""
+        if self.pupils_located and self._smooth_right.value is not None:
+            x, y = self._smooth_right.value
+            return (int(x), int(y))
 
     def horizontal_ratio(self):
-        """Returns a number between 0.0 and 1.0 that indicates the
+        """Returns a smoothed number between 0.0 and 1.0 that indicates the
         horizontal direction of the gaze. The extreme right is 0.0,
         the center is 0.5 and the extreme left is 1.0
         """
-        if self.pupils_located:
-            pupil_left = self.eye_left.pupil.x / (self.eye_left.center[0] * 2 - 10)
-            pupil_right = self.eye_right.pupil.x / (self.eye_right.center[0] * 2 - 10)
-            return (pupil_left + pupil_right) / 2
+        if self.pupils_located and self._smooth_h.value is not None:
+            return self._smooth_h.value
 
     def vertical_ratio(self):
-        """Returns a number between 0.0 and 1.0 that indicates the
+        """Returns a smoothed number between 0.0 and 1.0 that indicates the
         vertical direction of the gaze. The extreme top is 0.0,
         the center is 0.5 and the extreme bottom is 1.0
         """
+        if self.pupils_located and self._smooth_v.value is not None:
+            return self._smooth_v.value
+
+    def pupil_confidence(self):
+        # Confiança combinada
         if self.pupils_located:
-            pupil_left = self.eye_left.pupil.y / (self.eye_left.center[1] * 2 - 10)
-            pupil_right = self.eye_right.pupil.y / (self.eye_right.center[1] * 2 - 10)
-            return (pupil_left + pupil_right) / 2
+            left = self.eye_left.pupil.confidence
+            right = self.eye_right.pupil.confidence
+            return (left + right) / 2
+        return 0.0
 
     def is_right(self):
         """Returns true if the user is looking to the right"""
@@ -106,16 +132,46 @@ class GazeTracking:
         if self.pupils_located:
             return self.horizontal_ratio() >= 0.65
 
+    def is_up(self):
+        """Returns true if the user is looking up.
+
+        The vertical range of pupil movement is smaller than the horizontal,
+        so the thresholds are tighter (closer to 0.5).
+        """
+        if self.pupils_located:
+            v = self.vertical_ratio()
+            return v is not None and v <= 0.40
+
+    def is_down(self):
+        """Returns true if the user is looking down.
+
+        The vertical range of pupil movement is smaller than the horizontal,
+        so the thresholds are tighter (closer to 0.5).
+        """
+        if self.pupils_located:
+            v = self.vertical_ratio()
+            return v is not None and v >= 0.60
+
     def is_center(self):
         """Returns true if the user is looking at the center"""
         if self.pupils_located:
-            return self.is_right() is not True and self.is_left() is not True
+            return (self.is_right() is not True
+                    and self.is_left() is not True
+                    and self.is_up() is not True
+                    and self.is_down() is not True)
 
     def is_blinking(self):
         """Returns true if the user closes his eyes"""
         if self.pupils_located:
             blinking_ratio = (self.eye_left.blinking + self.eye_right.blinking) / 2
-            return blinking_ratio > 3.8
+            if blinking_ratio > 3.8:
+                v_left = self.eye_left.pupil.y / (self.eye_left.center[1] * 2 - 10)
+                v_right = self.eye_right.pupil.y / (self.eye_right.center[1] * 2 - 10)
+                raw_v = (v_left + v_right) / 2
+                if raw_v > 0.55 and self.pupil_confidence() > 0.35:
+                    return False
+                return True
+        return False
 
     def annotated_frame(self):
         """Returns the main frame with pupils highlighted"""
