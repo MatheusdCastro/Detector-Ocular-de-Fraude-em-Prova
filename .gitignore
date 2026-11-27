@@ -1,0 +1,14 @@
+# Arquivos de IDEs
+.vscode/
+.vs/
+*.user
+*.suo
+
+# Ambientes
+.venv
+venv/
+venv.bak/
+
+# Bytecode do Python
+__pycache__/
+*.py[cod]
