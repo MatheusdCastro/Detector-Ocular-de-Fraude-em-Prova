@@ -1,18 +1,11 @@
 import sys
 
-from PySide6.QtCore import QTime, Qt
+from PySide6.QtCore import QTime
 from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import (
-    QApplication,
-    QLabel,
-    QListWidget,
-    QPushButton,
-    QTabWidget,
-    QVBoxLayout,
-    QWidget,
-)
+from PySide6.QtWidgets import QApplication, QListWidget, QWidget
 
-from supervisor_protocol import DIRECTION_LABELS, VIDEO_SIZE
+from ocular_ui import Card, State, Workspace, action, heading, video_card
+from supervisor_protocol import DIRECTION_LABELS
 from supervisor_server import SupervisorServer
 
 
@@ -22,7 +15,6 @@ HISTORY_LIMIT = 100
 class SupervisorWindow(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Supervisor")
         self._camera_active = False
         self._direction = None
 
@@ -34,40 +26,41 @@ class SupervisorWindow(QWidget):
         self._build_ui()
 
     def _build_ui(self):
-        layout = QVBoxLayout(self)
-        self.video_label = QLabel("Sem vídeo")
-        self.video_label.setAlignment(Qt.AlignCenter)
-        self.video_label.setFixedSize(*VIDEO_SIZE)
-        self.video_label.setStyleSheet("background-color: #202020; color: #cccccc;")
-        layout.addWidget(self.video_label, alignment=Qt.AlignCenter)
-
-        self.connection_label = QLabel("Servidor parado")
-        self.connection_label.setAlignment(Qt.AlignCenter)
-        self.connection_label.setWordWrap(True)
-        layout.addWidget(self.connection_label)
-
-        self.server_button = QPushButton("Iniciar servidor")
+        self.workspace = Workspace(self, "Painel de supervisão", "Supervisor")
+        video, self.video_label = video_card("Transmissão do participante", "Sem vídeo")
+        self.server_button = action("Iniciar servidor", "connection", primary=True)
         self.server_button.clicked.connect(self.server.toggle_server)
-        layout.addWidget(self.server_button)
+        video.body.addWidget(self.server_button)
 
-        tabs = QTabWidget()
-        notifications = QWidget()
-        notification_layout = QVBoxLayout(notifications)
-        self.direction_label = QLabel("Direção indisponível")
-        notification_layout.addWidget(self.direction_label)
+        events = Card("Monitoramento e eventos", "history")
+        self.connection_state = State("Conexão", "Servidor parado", "connection")
+        self.connection_label = self.connection_state.value
+        self.camera_state = State("Câmera do participante", "Indisponível", "camera")
+        self.direction_state = State("Direção do olhar", "Indisponível", "eye")
+        for state in (self.connection_state, self.camera_state, self.direction_state):
+            events.body.addWidget(state)
+
+        events.body.addWidget(heading("Histórico de eventos", "sectionLabel"))
         self.history = QListWidget()
-        self.history.setFixedHeight(100)
-        notification_layout.addWidget(self.history)
-        tabs.addTab(notifications, "Notificações")
-        layout.addWidget(tabs)
+        self.history.setAccessibleName("Histórico de eventos")
+        self.history.setMinimumHeight(120)
+        events.body.addWidget(self.history, 1)
+        self.workspace.set_panels(video, events)
 
     def _update_connection(self, listening, connected, message):
-        self.connection_label.setText(message)
+        tone = "positive" if connected else "progress" if listening else "neutral"
+        if message.startswith("Erro"):
+            tone = "notice"
+        self.connection_state.set_state(message, tone)
         self.server_button.setText("Parar servidor" if listening else "Iniciar servidor")
         self._camera_active = False
         self._direction = None
         self.video_label.setText("Aguardando estado da câmera" if connected else "Sem vídeo")
-        self.direction_label.setText("Direção indisponível")
+        self.direction_state.set_state("Indisponível")
+        self.camera_state.set_state(
+            "Aguardando estado" if connected else "Indisponível",
+            "progress" if connected else "neutral",
+        )
 
     def _update_status(self, camera_active, direction):
         if not camera_active:
@@ -75,9 +68,14 @@ class SupervisorWindow(QWidget):
         elif not self._camera_active:
             self.video_label.setText("Aguardando vídeo")
         self._camera_active = camera_active
+        self.camera_state.set_state(
+            "Ligada" if camera_active else "Desligada",
+            "positive" if camera_active else "neutral",
+        )
 
         description = DIRECTION_LABELS.get(direction, "Direção indisponível")
-        self.direction_label.setText(description)
+        tone = "notice" if direction == "not_detected" else "neutral"
+        self.direction_state.set_state(description, tone)
         if direction is not None and direction != self._direction:
             time = QTime.currentTime().toString("HH:mm:ss")
             self.history.addItem(f"{time}  {description}")
@@ -91,7 +89,7 @@ class SupervisorWindow(QWidget):
             return
         pixmap = QPixmap()
         if pixmap.loadFromData(jpeg, "JPEG"):
-            self.video_label.setPixmap(pixmap)
+            self.video_label.set_frame(pixmap)
 
     def closeEvent(self, event):
         self.server.stop()
