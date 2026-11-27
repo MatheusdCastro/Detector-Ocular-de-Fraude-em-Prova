@@ -31,6 +31,10 @@ class GazeTracking:
         self.calibration = Calibration()
         self._head_pose_estimator = HeadPoseEstimator()
 
+        # Offsets de calibração (zerados até a calibração de tela ser feita)
+        self._yaw_offset = 0.0
+        self._pitch_offset = 0.0
+
         # _face_detector is used to detect faces
         self._face_detector = dlib.get_frontal_face_detector()
 
@@ -144,7 +148,8 @@ class GazeTracking:
 
         eye_yaw = (0.5 - self.horizontal_ratio()) * self.EYE_DEGREES_PER_RATIO
         eye_pitch = (0.5 - self.vertical_ratio()) * self.EYE_DEGREES_PER_RATIO
-        return (self.head_pose.yaw + eye_yaw, self.head_pose.pitch + eye_pitch)
+        return (self.head_pose.yaw + eye_yaw - self._yaw_offset,
+                self.head_pose.pitch + eye_pitch - self._pitch_offset)
 
     def gaze_region(self):
         """Returns the region being looked at as (horizontal, vertical), where

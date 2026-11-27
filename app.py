@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 )
 
 from gaze_tracking.gaze_tracking import GazeTracking
+from screen_calibration import CalibrationOverlay
 from supervisor_client import SupervisorClient
 from supervisor_protocol import DIRECTION_LABELS, SUPERVISOR_URL, VIDEO_SIZE
 
@@ -177,10 +178,62 @@ class App(QWidget):
 
     # ----------------------------------------------------------- calibração
     def start_screen_calibration(self):
-        # conectar à calibração do tamanho da tela e às etapas de calibração quando o povo fizer
-        QMessageBox.information(
-            self, "Calibrar tela", "Ainda tem que implementar :( :("
-        )
+        """Abre a tela de calibração fullscreen com pontos de referência."""
+        if self.gaze is None:
+            self.gaze = GazeTracking()
+
+        # Abrir câmera se necessário
+        self._cal_opened_camera = False
+        if self.capture is None or not self.capture.isOpened():
+            capture = cv2.VideoCapture(CAMERA_INDEX)
+            if not capture.isOpened():
+                capture.release()
+                QMessageBox.critical(self, "Erro", "Não foi possível acessar a câmera.")
+                return
+            self.capture = capture
+            self._cal_opened_camera = True
+
+        # Pausar o loop principal durante a calibração
+        self._cal_was_running = self.running
+        self.running = False
+        self.timer.stop()
+
+        # Abrir a tela de calibração
+        overlay = CalibrationOverlay(self.gaze, self.capture)
+        overlay.finished.connect(self._on_calibration_done)
+        self._calibration_overlay = overlay
+        overlay.start()
+
+    def _on_calibration_done(self, data):
+        """Aplica os resultados da calibração ao GazeTracking."""
+        if data is not None:
+            # Aplicar offsets do centro (corrige o ponto zero)
+            self.gaze._yaw_offset = data["offsets"]["yaw"]
+            self.gaze._pitch_offset = data["offsets"]["pitch"]
+            # Aplicar limiares calibrados
+            self.gaze.HORIZONTAL_THRESHOLD_DEG = data["thresholds"]["horizontal"]
+            self.gaze.VERTICAL_THRESHOLD_DEG = data["thresholds"]["vertical"]
+
+            acc = data["verificacao"]["acuracia"]
+            h_t = data["thresholds"]["horizontal"]
+            v_t = data["thresholds"]["vertical"]
+            msg = (
+                "Calibração aplicada!\n\n"
+                "Cobertura da tela: {:.0%}\n"
+                "Borda horizontal: {:.1f}°\n"
+                "Borda vertical: {:.1f}°"
+            ).format(acc, h_t, v_t)
+            QMessageBox.information(self, "Calibração", msg)
+
+        # Retomar câmera se estava ligada, ou liberar se foi aberta só para calibrar
+        if self._cal_was_running:
+            self.running = True
+            self.timer.start()
+        elif self._cal_opened_camera:
+            self.capture.release()
+            self.capture = None
+
+        self._calibration_overlay = None
 
     # ------------------------------------------------------------- encerrar
     def closeEvent(self, event):
